@@ -20,7 +20,7 @@ app.add_middleware(
 )
 
 # Using Dentro/face-swap space, which supports face indices for precise swapping
-client = Client("Dentro/face-swap", verbose=False, heart_beat_timeout=300, request_timeout=300)
+client = Client("Dentro/face-swap", verbose=False)
 
 @app.get("/ping")
 def ping():
@@ -39,14 +39,17 @@ async def swap_faces(target: UploadFile = File(...), source: UploadFile = File(.
 
         print(f"Input images loaded: source size={source_img.size}, target size={target_img.size}")  # Debug
 
-        # Call Gradio Space: source_img (face to use), 1 (first face), target_img (dest), 1 (first face)
-        result = client.predict(
+        # Submit job with timeout handling
+        job = client.submit(
             source_img,
             1,  # Source face index (assume single face)
             target_img,
             1,  # Target face index (assume single face)
-            api_name="/predict"  # Default for gr.Interface
+            api_name="/predict"
         )
+
+        # Wait for result with timeout (in seconds)
+        result = job.result(timeout=300)  # 5 minutes timeout
 
         print(f"Result type: {type(result)}")  # Debug
 
