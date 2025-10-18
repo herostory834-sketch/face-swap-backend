@@ -1,13 +1,12 @@
 from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from gradio_client import Client
+from gradio_client import Client, file
 from fastapi.responses import HTMLResponse
 from PIL import Image
 import io
 import base64
 import numpy as np
 import os
-import tempfile
 
 app = FastAPI(title="Face Swap Backend")
 
@@ -27,43 +26,40 @@ def ping():
 
 @app.post("/swap_faces")
 async def swap_faces(target: UploadFile = File(...), source: UploadFile = File(...)):
-    temp_files = []
     try:
         target_bytes = await target.read()
         source_bytes = await source.read()
 
-        # Create temporary files for images (gradio_client expects paths/URLs)
-        target_file = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
-        target_file.write(target_bytes)
-        target_file.close()
-        target_path = target_file.name
-        temp_files.append(target_path)
+        print(f"Input bytes lengths: target={len(target_bytes)}, source={len(source_bytes)}")  # Debug
 
-        source_file = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
-        source_file.write(source_bytes)
-        source_file.close()
-        source_path = source_file.name
-        temp_files.append(source_path)
+        # Prepare inputs using gradio_client.file for binary data
+        target_file = file(data=target_bytes)
+        source_file = file(data=source_bytes)
 
-        print(f"Created temp files: {target_path}, {source_path}")  # Debug
-
-        # Call Gradio Space with file paths
+        # Call Gradio Space
         result = client.predict(
-            target_path,
-            source_path,
+            target_file,
+            source_file,
             0,            # Anonymization ratio
             0,            # Adversarial defense ratio
-            ["Compare"],  # Mode (may return multiple outputs)
+            ["Compare"],  # Mode
             api_name="/run_inference"
         )
 
-        print(f"Result type: {type(result)}, length: {len(result) if hasattr(result, '__len__') else 'N/A'}")  # Debug
-
-        # Assume multiple outputs for "Compare" mode; take the last one (swapped image)
-        output = result[-1] if isinstance(result, (list, tuple)) else result
+        print(f"Result type: {type(result)}")  # Debug
+        if isinstance(result, (list, tuple)):
+            output = result[0]  # Take first (or only) output; adjust if multiple
+            print(f"List result, first item type: {type(output)}")  # Debug
+        else:
+            output = result
         print(f"Output type: {type(output)}")  # Debug
 
-        # Convert to base64 string
+        # If None, early error
+        if output is None:
+            return {"error": "No output generated (possibly no faces detected)"}
+
+        # Convert to base64 string, ensuring str in all cases
+        base64_image = None
         if isinstance(output, (bytes, bytearray)):
             img_bytes = output
             base64_image = base64.b64encode(img_bytes).decode("utf-8")
@@ -75,9 +71,13 @@ async def swap_faces(target: UploadFile = File(...), source: UploadFile = File(.
             base64_image = base64.b64encode(img_bytes).decode("utf-8")
             print("Handled as PIL.Image")  # Debug
         elif isinstance(output, np.ndarray):
-            # Ensure it's uint8 RGB
+            # Ensure uint8 RGB
             if output.dtype != np.uint8:
                 output = (np.clip(output, 0, 1) * 255).astype(np.uint8)
+            if len(output.shape) == 3 and output.shape[2] == 3:  # HWC
+                pass
+            elif len(output.shape) == 3 and output.shape[0] == 3:  # CHW
+                output = np.transpose(output, (1, 2, 0))
             img = Image.fromarray(output)
             buffered = io.BytesIO()
             img.save(buffered, format="PNG")
@@ -85,32 +85,30 @@ async def swap_faces(target: UploadFile = File(...), source: UploadFile = File(.
             base64_image = base64.b64encode(img_bytes).decode("utf-8")
             print("Handled as np.ndarray")  # Debug
         elif isinstance(output, str):
-            # Could be temp path, URL, or pre-encoded base64
-            if os.path.isfile(output):  # Local temp file path from Gradio client
+            # Handle path, URL, or base64 str
+            if os.path.isfile(output):
                 with open(output, "rb") as f:
                     img_bytes = f.read()
                 base64_image = base64.b64encode(img_bytes).decode("utf-8")
                 print("Handled as local file path")  # Debug
             else:
-                # Assume URL or existing base64 str
+                # Assume it's already base64 or URL; for URL, you'd fetch, but assume base64 for now
                 base64_image = output
-                print("Handled as str (URL/base64)")  # Debug
+                print("Handled as str (assumed base64/URL)")  # Debug
         else:
             print(f"Unexpected output type: {type(output)}")  # Debug
             return {"error": f"Unexpected output type: {type(output)}"}
 
-        print(f"Base64 image type: {type(base64_image)}, length: {len(base64_image)}")  # Debug: Should be str
+        # Final safety check: ensure it's str
+        if not isinstance(base64_image, str):
+            print(f"Warning: base64_image is not str, type: {type(base64_image)}")  # Debug
+            base64_image = base64.b64encode(base64_image).decode("utf-8") if isinstance(base64_image, bytes) else str(base64_image)
+
+        print(f"Final base64_image type: {type(base64_image)}, length: {len(base64_image) if base64_image else 0}")  # Debug: Should be str
         return {"result": base64_image}
 
     except Exception as e:
-        print(f"Exception details: {type(e).__name__}: {e}")  # More debug
+        print(f"Exception details: {type(e).__name__}: {str(e)}")  # More debug
+        import traceback
+        print(traceback.format_exc())  # Full traceback for debugging
         return {"error": str(e)}
-    finally:
-        # Clean up temp files
-        for temp_path in temp_files:
-            try:
-                if os.path.exists(temp_path):
-                    os.unlink(temp_path)
-                    print(f"Cleaned up: {temp_path}")  # Debug
-            except Exception as cleanup_e:
-                print(f"Cleanup error: {cleanup_e}")
