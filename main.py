@@ -2,6 +2,7 @@ from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from gradio_client import Client
 from fastapi.responses import HTMLResponse
+import base64
 
 app = FastAPI(title="Face Swap Backend")
 
@@ -17,30 +18,16 @@ app.add_middleware(
 # Connect to Hugging Face Space
 client = Client("felixrosberg/face-swap")
 
-# ---------------------------
-# Ping endpoint for UptimeRobot
-# ---------------------------
 @app.get("/ping")
 def ping():
-    """
-    Simple endpoint for uptime monitoring.
-    Can also be accessed in a browser.
-    """
     html_content = """
     <html>
-        <head>
-            <title>Face Swap Backend</title>
-        </head>
-        <body>
-            <h2>✅ Backend is alive!</h2>
-        </body>
+        <head><title>Face Swap Backend</title></head>
+        <body><h2>✅ Backend is alive!</h2></body>
     </html>
     """
     return HTMLResponse(content=html_content, status_code=200)
 
-# ---------------------------
-# Face swap endpoint
-# ---------------------------
 @app.post("/swap_faces")
 async def swap_faces(target: UploadFile = File(...), source: UploadFile = File(...)):
     try:
@@ -56,7 +43,14 @@ async def swap_faces(target: UploadFile = File(...), source: UploadFile = File(.
             ["Compare"], # Mode
             api_name="/run_inference"
         )
-        # Return base64 image string
+
+        # If result is bytes, encode to base64 for JSON serialization
+        if isinstance(result[0], (bytes, bytearray)):
+            base64_image = base64.b64encode(result[0]).decode("utf-8")
+            return {"result": base64_image}
+
+        # If result is already a string (base64), return as-is
         return {"result": result[0]}
+
     except Exception as e:
         return {"error": str(e)}
