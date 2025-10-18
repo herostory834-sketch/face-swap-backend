@@ -8,6 +8,7 @@ import base64
 import numpy as np
 import traceback
 import os
+import tempfile
 
 app = FastAPI(title="Face Swap Backend")
 
@@ -19,7 +20,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Using ezioruan/roop which expects exactly 2 inputs: source_face, target_image
+# Using ezioruan/roop which works well with file paths
 client = Client("ezioruan/roop", verbose=False)
 
 @app.get("/ping")
@@ -28,21 +29,31 @@ def ping():
 
 @app.post("/swap_faces")
 async def swap_faces(target: UploadFile = File(...), source: UploadFile = File(...)):
+    temp_files = []
     try:
         # Read uploaded files
         target_bytes = await target.read()
         source_bytes = await source.read()
 
-        # Convert to PIL Images (source=child face to insert, target=base body image)
-        source_img = Image.open(io.BytesIO(source_bytes)).convert("RGB")  # Ensure RGB
-        target_img = Image.open(io.BytesIO(target_bytes)).convert("RGB")  # Ensure RGB
+        # Create temporary files for consistent path inputs
+        source_file = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+        source_file.write(source_bytes)
+        source_file.close()
+        source_path = source_file.name
+        temp_files.append(source_path)
 
-        print(f"Input images loaded: source size={source_img.size}, target size={target_img.size}")  # Debug
+        target_file = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+        target_file.write(target_bytes)
+        target_file.close()
+        target_path = target_file.name
+        temp_files.append(target_path)
 
-        # Call Gradio Space: exactly 2 args - source_img (face to insert), target_img (image to modify)
+        print(f"Temp files created: source={source_path}, target={target_path}")  # Debug
+
+        # Call Gradio Space with file paths: source_path (face to insert), target_path (image to modify)
         result = client.predict(
-            source_img,
-            target_img,
+            source_path,
+            target_path,
             api_name="/predict"
         )
 
@@ -97,3 +108,12 @@ async def swap_faces(target: UploadFile = File(...), source: UploadFile = File(.
         print(f"Exception details: {type(e).__name__}: {e}")
         print(traceback.format_exc())  # Full traceback
         return {"error": str(e)}
+    finally:
+        # Clean up temp files
+        for temp_path in temp_files:
+            try:
+                if os.path.exists(temp_path):
+                    os.unlink(temp_path)
+                    print(f"Cleaned up: {temp_path}")
+            except Exception as cleanup_e:
+                print(f"Cleanup error: {cleanup_e}")
