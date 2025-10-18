@@ -67,7 +67,7 @@ async def swap_faces(target: UploadFile = File(...), source: UploadFile = File(.
             source_path,
             target_path,
             False,
-            api_name="/predict"
+            api_name="/run_inference"
         )
 
         output = result[0] if isinstance(result, (list, tuple)) else result
