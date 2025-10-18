@@ -26,7 +26,7 @@ def get_client():
     global client
     if client is None:
         try:
-            client = Client("jonathanzelaya/face-swap-pro-1", verbose=False)
+            client = Client("felixrosberg/face-swap", verbose=False)
             print("✅ Hugging Face client initialized")
         except Exception as e:
             print(f"⚠️ Failed to initialize Hugging Face client: {e}")
