@@ -6,6 +6,7 @@ from PIL import Image
 import io
 import base64
 import numpy as np
+import os  # Added for os.path.isfile check
 
 app = FastAPI(title="Face Swap Backend")
 
@@ -40,26 +41,48 @@ async def swap_faces(target: UploadFile = File(...), source: UploadFile = File(.
         )
 
         output = result[0]
+        print(f"Gradio output type: {type(output)}")  # Debug: Check this in logs
 
-        # Convert to base64
+        # Convert to base64 string
         if isinstance(output, (bytes, bytearray)):
-            base64_image = base64.b64encode(output).decode("utf-8")
+            img_bytes = output
+            base64_image = base64.b64encode(img_bytes).decode("utf-8")
+            print("Handled as bytes")  # Debug
         elif isinstance(output, Image.Image):
             buffered = io.BytesIO()
             output.save(buffered, format="PNG")
-            base64_image = base64.b64encode(buffered.getvalue()).decode("utf-8")
+            img_bytes = buffered.getvalue()
+            base64_image = base64.b64encode(img_bytes).decode("utf-8")
+            print("Handled as PIL.Image")  # Debug
         elif isinstance(output, np.ndarray):
+            # Ensure it's uint8 RGB (Gradio/FaceDancer often returns this)
+            if output.dtype != np.uint8:
+                output = (np.clip(output, 0, 1) * 255).astype(np.uint8)
             img = Image.fromarray(output)
             buffered = io.BytesIO()
             img.save(buffered, format="PNG")
-            base64_image = base64.b64encode(buffered.getvalue()).decode("utf-8")
+            img_bytes = buffered.getvalue()
+            base64_image = base64.b64encode(img_bytes).decode("utf-8")
+            print("Handled as np.ndarray")  # Debug
         elif isinstance(output, str):
-            # Already base64 or URL
-            base64_image = output
+            # Could be temp path, URL, or pre-encoded base64
+            if os.path.isfile(output):  # Local temp file path from Gradio client
+                with open(output, "rb") as f:
+                    img_bytes = f.read()
+                base64_image = base64.b64encode(img_bytes).decode("utf-8")
+                print("Handled as local file path")  # Debug
+            else:
+                # Assume URL or existing base64 str
+                # If URL, fetch it (optional: add http.get logic here if needed)
+                base64_image = output
+                print("Handled as str (URL/base64)")  # Debug
         else:
+            print(f"Unexpected output type: {type(output)}")  # Debug
             return {"error": f"Unexpected output type: {type(output)}"}
 
+        print(f"Base64 image type: {type(base64_image)}, length: {len(base64_image)}")  # Debug: Should be str
         return {"result": base64_image}
 
     except Exception as e:
+        print(f"Exception details: {type(e).__name__}: {e}")  # More debug
         return {"error": str(e)}
