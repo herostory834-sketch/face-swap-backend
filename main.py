@@ -20,8 +20,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Using Dentro/face-swap space, which supports file paths for images
-client = Client("Dentro/face-swap", verbose=False)
+# Using felixrosberg/face-swap, reliable with known API
+client = Client("felixrosberg/face-swap", verbose=False)
 
 @app.get("/ping")
 def ping():
@@ -36,31 +36,30 @@ async def swap_faces(target: UploadFile = File(...), source: UploadFile = File(.
         source_bytes = await source.read()
 
         # Create temporary files for images (paths are serializable)
-        source_file = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
-        source_file.write(source_bytes)
-        source_file.close()
-        source_path = source_file.name
-        temp_files.append(source_path)
-
         target_file = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
         target_file.write(target_bytes)
         target_file.close()
         target_path = target_file.name
         temp_files.append(target_path)
 
-        print(f"Temp files created: source={source_path}, target={target_path}")  # Debug
+        source_file = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+        source_file.write(source_bytes)
+        source_file.close()
+        source_path = source_file.name
+        temp_files.append(source_path)
 
-        # Submit job with file paths: source_path, 1 (source index), target_path, 1 (target index)
-        job = client.submit(
-            source_path,
-            1,  # Source face index (assume single face)
+        print(f"Temp files created: target={target_path}, source={source_path}")  # Debug
+
+        # Call Gradio Space: target_path (body), source_path (face), 0 (no anonym), 0 (no adv), [] (basic swap)
+        # api_name="/run_inference"
+        result = client.predict(
             target_path,
-            1,  # Target face index (assume single face)
-            api_name="/predict"
+            source_path,
+            0,  # Anonymization ratio (0 = full source identity)
+            0,  # Adversarial defense (0 = none)
+            [],  # Settings (empty for basic single output)
+            api_name="/run_inference"
         )
-
-        # Wait for result with timeout
-        result = job.result(timeout=300)  # 5 minutes timeout
 
         print(f"Result type: {type(result)}")  # Debug
 
@@ -100,11 +99,16 @@ async def swap_faces(target: UploadFile = File(...), source: UploadFile = File(.
                 base64_image = base64.b64encode(img_bytes).decode("utf-8")
                 print("Handled as local file path")
             else:
+                # Assume it's already base64
                 base64_image = output
                 print("Handled as str (URL/base64)")
         else:
             print(f"Unexpected output type: {type(output)}")
             return {"error": f"Unexpected output type: {type(output)}"}
+
+        # Ensure base64_image is str
+        if not isinstance(base64_image, str):
+            base64_image = base64_image.decode("utf-8")
 
         print(f"Base64 image generated: type={type(base64_image)}, length={len(base64_image)}")  # Debug
         return {"result": base64_image}
