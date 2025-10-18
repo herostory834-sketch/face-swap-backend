@@ -1,7 +1,7 @@
 from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from gradio_client import Client
 from fastapi.responses import HTMLResponse
+from gradio_client import Client
 from PIL import Image
 import io
 import base64
@@ -20,8 +20,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Switched to jonathanzelaya/face-swap-pro-1, a reliable Roop-based space
-client = Client("jonathanzelaya/face-swap-pro-1", verbose=False)
+client = None  # Don't initialize yet
+
+def get_client():
+    global client
+    if client is None:
+        try:
+            client = Client("jonathanzelaya/face-swap-pro-1", verbose=False)
+            print("✅ Hugging Face client initialized")
+        except Exception as e:
+            print(f"⚠️ Failed to initialize Hugging Face client: {e}")
+            client = None
+    return client
 
 @app.get("/ping")
 def ping():
@@ -31,94 +41,65 @@ def ping():
 async def swap_faces(target: UploadFile = File(...), source: UploadFile = File(...)):
     temp_files = []
     try:
-        # Read uploaded files
+        gr_client = get_client()
+        if gr_client is None:
+            return {"error": "Face swap service unavailable. Please try again later."}
+
+        # --- Read uploaded files ---
         target_bytes = await target.read()
         source_bytes = await source.read()
 
-        # Create temporary files for images (source=face to swap from, target=body to swap into)
-        source_file = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
-        source_file.write(source_bytes)
-        source_file.close()
-        source_path = source_file.name
+        # --- Create temporary files ---
+        source_path = tempfile.NamedTemporaryFile(suffix=".png", delete=False).name
+        with open(source_path, "wb") as f:
+            f.write(source_bytes)
         temp_files.append(source_path)
 
-        target_file = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
-        target_file.write(target_bytes)
-        target_file.close()
-        target_path = target_file.name
+        target_path = tempfile.NamedTemporaryFile(suffix=".png", delete=False).name
+        with open(target_path, "wb") as f:
+            f.write(target_bytes)
         temp_files.append(target_path)
 
-        print(f"Temp files created: source (face)={source_path}, target (body)={target_path}")  # Debug
+        print(f"Temp files created: source={source_path}, target={target_path}")
 
-        # Call Gradio Space: source_path (face), target_path (body), False (no enhancer)
-        result = client.predict(
+        # --- Call Hugging Face Space ---
+        result = gr_client.predict(
             source_path,
             target_path,
-            False,  # doFaceEnhancer
+            False,
             api_name="/predict"
         )
 
-        print(f"Result type: {type(result)}")  # Debug
+        output = result[0] if isinstance(result, (list, tuple)) else result
 
-        # Handle possible list output; take the single image
-        output = result[0] if isinstance(result, (list, tuple)) and len(result) > 0 else result
-        print(f"Output type: {type(output)}")  # Debug
-
-        # Convert to base64 string (robust handling)
+        # --- Convert result to base64 ---
         if isinstance(output, (bytes, bytearray)):
-            img_bytes = output
-            base64_image = base64.b64encode(img_bytes).decode("utf-8")
-            print("Handled as bytes")
+            base64_image = base64.b64encode(output).decode("utf-8")
         elif isinstance(output, Image.Image):
-            buffered = io.BytesIO()
-            output.save(buffered, format="PNG")
-            img_bytes = buffered.getvalue()
-            base64_image = base64.b64encode(img_bytes).decode("utf-8")
-            print("Handled as PIL.Image")
+            buf = io.BytesIO()
+            output.save(buf, format="PNG")
+            base64_image = base64.b64encode(buf.getvalue()).decode("utf-8")
         elif isinstance(output, np.ndarray):
-            # Ensure uint8 RGB
-            if output.dtype != np.uint8:
-                output = np.clip(output, 0, 1) * 255
-                output = np.uint8(output)
-            if len(output.shape) == 2:  # Grayscale to RGB
-                output = np.stack((output,) * 3, axis=-1)
-            img = Image.fromarray(output)
-            buffered = io.BytesIO()
-            img.save(buffered, format="PNG")
-            img_bytes = buffered.getvalue()
-            base64_image = base64.b64encode(img_bytes).decode("utf-8")
-            print("Handled as np.ndarray")
+            img = Image.fromarray(output.astype(np.uint8))
+            buf = io.BytesIO()
+            img.save(buf, format="PNG")
+            base64_image = base64.b64encode(buf.getvalue()).decode("utf-8")
+        elif isinstance(output, str) and os.path.isfile(output):
+            with open(output, "rb") as f:
+                base64_image = base64.b64encode(f.read()).decode("utf-8")
         elif isinstance(output, str):
-            # Handle path or base64 str
-            if os.path.isfile(output):
-                with open(output, "rb") as f:
-                    img_bytes = f.read()
-                base64_image = base64.b64encode(img_bytes).decode("utf-8")
-                print("Handled as local file path")
-            else:
-                base64_image = output
-                print("Handled as str (URL/base64)")
+            base64_image = output
         else:
-            print(f"Unexpected output type: {type(output)}")
             return {"error": f"Unexpected output type: {type(output)}"}
 
-        # Ensure base64_image is str
-        if not isinstance(base64_image, str):
-            base64_image = base64_image.decode("utf-8")
-
-        print(f"Base64 image generated: type={type(base64_image)}, length={len(base64_image)}")  # Debug
         return {"result": base64_image}
 
     except Exception as e:
-        print(f"Exception details: {type(e).__name__}: {e}")
-        print(traceback.format_exc())  # Full traceback
+        print(traceback.format_exc())
         return {"error": str(e)}
     finally:
-        # Clean up temp files
-        for temp_path in temp_files:
+        for path in temp_files:
             try:
-                if os.path.exists(temp_path):
-                    os.unlink(temp_path)
-                    print(f"Cleaned up: {temp_path}")
-            except Exception as cleanup_e:
-                print(f"Cleanup error: {cleanup_e}")
+                os.remove(path)
+            except Exception:
+                pass
