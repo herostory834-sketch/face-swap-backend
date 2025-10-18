@@ -19,7 +19,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Using a reliable Roop-based space for simple two-image face swap
+# Using ezioruan/roop which expects exactly 2 inputs: source_face, target_image
 client = Client("ezioruan/roop", verbose=False)
 
 @app.get("/ping")
@@ -39,13 +39,10 @@ async def swap_faces(target: UploadFile = File(...), source: UploadFile = File(.
 
         print(f"Input images loaded: source size={source_img.size}, target size={target_img.size}")  # Debug
 
-        # Call Gradio Space: source_img (face to insert), target_img (image to modify),
-        # face_enhancer=False, restore_face=False (simple swap without enhancements)
+        # Call Gradio Space: exactly 2 args - source_img (face to insert), target_img (image to modify)
         result = client.predict(
             source_img,
             target_img,
-            False,  # face_enhancer
-            False,  # restore_face
             api_name="/predict"
         )
 
