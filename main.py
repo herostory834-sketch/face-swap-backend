@@ -2,6 +2,8 @@ from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from gradio_client import Client
 from fastapi.responses import HTMLResponse
+from PIL import Image
+import io
 import base64
 
 app = FastAPI(title="Face Swap Backend")
@@ -39,13 +41,28 @@ async def swap_faces(target: UploadFile = File(...), source: UploadFile = File(.
             api_name="/run_inference"
         )
 
-        # Convert bytes to base64 string if needed
+        # Convert result to base64
         output = result[0]
-        if isinstance(output, (bytes, bytearray)):
-            output = base64.b64encode(output).decode("utf-8")
 
-        # Return JSON with base64 string
-        return {"result": output}
+        # If it’s already bytes, encode directly
+        if isinstance(output, (bytes, bytearray)):
+            base64_image = base64.b64encode(output).decode("utf-8")
+        # If it’s a PIL Image, save to bytes then encode
+        elif isinstance(output, Image.Image):
+            buffered = io.BytesIO()
+            output.save(buffered, format="PNG")
+            base64_image = base64.b64encode(buffered.getvalue()).decode("utf-8")
+        # If it’s a string (maybe URL or already base64), just return
+        elif isinstance(output, str):
+            base64_image = output
+        else:
+            # Fallback: try converting to bytes via PIL
+            img = Image.fromarray(output)
+            buffered = io.BytesIO()
+            img.save(buffered, format="PNG")
+            base64_image = base64.b64encode(buffered.getvalue()).decode("utf-8")
+
+        return {"result": base64_image}
 
     except Exception as e:
         return {"error": str(e)}
