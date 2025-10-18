@@ -1,6 +1,7 @@
 from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from gradio_client import Client
+from fastapi.responses import HTMLResponse
 
 app = FastAPI(title="Face Swap Backend")
 
@@ -16,6 +17,30 @@ app.add_middleware(
 # Connect to Hugging Face Space
 client = Client("felixrosberg/face-swap")
 
+# ---------------------------
+# Ping endpoint for UptimeRobot
+# ---------------------------
+@app.get("/ping")
+def ping():
+    """
+    Simple endpoint for uptime monitoring.
+    Can also be accessed in a browser.
+    """
+    html_content = """
+    <html>
+        <head>
+            <title>Face Swap Backend</title>
+        </head>
+        <body>
+            <h2>✅ Backend is alive!</h2>
+        </body>
+    </html>
+    """
+    return HTMLResponse(content=html_content, status_code=200)
+
+# ---------------------------
+# Face swap endpoint
+# ---------------------------
 @app.post("/swap_faces")
 async def swap_faces(target: UploadFile = File(...), source: UploadFile = File(...)):
     try:
