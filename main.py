@@ -1,10 +1,13 @@
 from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
+from gradio_client import Client
 from fastapi.responses import HTMLResponse
+from PIL import Image
 import io
 import base64
+import numpy as np
 import traceback
-import requests
+import os
 
 app = FastAPI(title="Face Swap Backend")
 
@@ -16,7 +19,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-SPACE_URL = "https://ezioruan-roop.hf.space/api/predict"
+# Using Dentro/face-swap space, which supports face indices for precise swapping
+client = Client("Dentro/face-swap", verbose=False, heart_beat_timeout=300, request_timeout=300)
 
 @app.get("/ping")
 def ping():
@@ -29,48 +33,67 @@ async def swap_faces(target: UploadFile = File(...), source: UploadFile = File(.
         target_bytes = await target.read()
         source_bytes = await source.read()
 
-        # Encode images to base64 strings with data URI prefix (required for Gradio image inputs)
-        source_base64 = "data:image/png;base64," + base64.b64encode(source_bytes).decode("utf-8")
-        target_base64 = "data:image/png;base64," + base64.b64encode(target_bytes).decode("utf-8")
+        # Convert to PIL Images (source=child face to insert, target=base body image)
+        source_img = Image.open(io.BytesIO(source_bytes)).convert("RGB")  # Ensure RGB
+        target_img = Image.open(io.BytesIO(target_bytes)).convert("RGB")  # Ensure RGB
 
-        print(f"Images encoded with prefix: source length={len(source_base64)}, target length={len(target_base64)}")  # Debug
+        print(f"Input images loaded: source size={source_img.size}, target size={target_img.size}")  # Debug
 
-        # Prepare payload for Gradio API (roop expects: source_image, target_image, face_enhancer=False, restore_face=False, etc.)
-        # Start with minimal: just the two images; add defaults if needed
-        payload = {
-            "data": [
-                source_base64,      # source_image (face to swap in)
-                target_base64,      # target_image (body to swap onto)
-                False,              # face_enhancer
-                False               # restore_face
-            ]
-        }
-
-        # Send POST request to HF Space API
-        response = requests.post(
-            SPACE_URL,
-            json=payload,
-            headers={"Content-Type": "application/json"},
-            timeout=180  # Further increased timeout for potential enhancements
+        # Call Gradio Space: source_img (face to use), 1 (first face), target_img (dest), 1 (first face)
+        result = client.predict(
+            source_img,
+            1,  # Source face index (assume single face)
+            target_img,
+            1,  # Target face index (assume single face)
+            api_name="/predict"  # Default for gr.Interface
         )
 
-        print(f"HF API status: {response.status_code}, response: {response.text[:500]}...")  # Debug (truncated)
+        print(f"Result type: {type(result)}")  # Debug
 
-        if response.status_code == 200:
-            result = response.json()
-            if "data" in result and result["data"] is not None and len(result["data"]) > 0:
-                # Extract the output image base64 (remove prefix if present)
-                output_base64_full = result["data"][0]
-                if output_base64_full.startswith("data:image"):
-                    output_base64 = output_base64_full.split(",")[1]
-                else:
-                    output_base64 = output_base64_full
-                print(f"Received base64 length: {len(output_base64)}")  # Debug
-                return {"result": output_base64}
+        # Handle possible list output; take the single image
+        output = result[0] if isinstance(result, (list, tuple)) and len(result) > 0 else result
+        print(f"Output type: {type(output)}")  # Debug
+
+        # Convert to base64 string (robust handling)
+        if isinstance(output, (bytes, bytearray)):
+            img_bytes = output
+            base64_image = base64.b64encode(img_bytes).decode("utf-8")
+            print("Handled as bytes")
+        elif isinstance(output, Image.Image):
+            buffered = io.BytesIO()
+            output.save(buffered, format="PNG")
+            img_bytes = buffered.getvalue()
+            base64_image = base64.b64encode(img_bytes).decode("utf-8")
+            print("Handled as PIL.Image")
+        elif isinstance(output, np.ndarray):
+            # Ensure uint8 RGB
+            if output.dtype != np.uint8:
+                output = np.clip(output, 0, 1) * 255
+                output = np.uint8(output)
+            if len(output.shape) == 2:  # Grayscale to RGB
+                output = np.stack((output,) * 3, axis=-1)
+            img = Image.fromarray(output)
+            buffered = io.BytesIO()
+            img.save(buffered, format="PNG")
+            img_bytes = buffered.getvalue()
+            base64_image = base64.b64encode(img_bytes).decode("utf-8")
+            print("Handled as np.ndarray")
+        elif isinstance(output, str):
+            # Handle path or base64 str
+            if os.path.isfile(output):
+                with open(output, "rb") as f:
+                    img_bytes = f.read()
+                base64_image = base64.b64encode(img_bytes).decode("utf-8")
+                print("Handled as local file path")
             else:
-                return {"error": f"No valid data in response: {result}"}
+                base64_image = output
+                print("Handled as str (URL/base64)")
         else:
-            return {"error": f"HF API error: {response.status_code} - {response.text}"}
+            print(f"Unexpected output type: {type(output)}")
+            return {"error": f"Unexpected output type: {type(output)}"}
+
+        print(f"Base64 image generated: type={type(base64_image)}, length={len(base64_image)}")  # Debug
+        return {"result": base64_image}
 
     except Exception as e:
         print(f"Exception details: {type(e).__name__}: {e}")
