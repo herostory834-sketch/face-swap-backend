@@ -6,6 +6,7 @@ from PIL import Image
 import io
 import base64
 import numpy as np
+import traceback
 
 app = FastAPI(title="Face Swap Backend")
 
@@ -17,8 +18,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Using felixrosberg/face-swap with verbose logging
-client = Client("felixrosberg/face-swap", verbose=True)
+# Switched to a simpler, more reliable space: Dentro/face-swap
+# Supports direct PIL images, basic two-image swap with face index (we use 1 for single face)
+client = Client("Dentro/face-swap", verbose=False, timeout=120.0)  # Increased timeout to handle inference time
 
 @app.get("/ping")
 def ping():
@@ -27,34 +29,32 @@ def ping():
 @app.post("/swap_faces")
 async def swap_faces(target: UploadFile = File(...), source: UploadFile = File(...)):
     try:
+        # Read uploaded files
         target_bytes = await target.read()
         source_bytes = await source.read()
 
-        # Convert bytes to PIL Images
-        target_img = Image.open(io.BytesIO(target_bytes))
-        source_img = Image.open(io.BytesIO(source_bytes))
+        # Convert to PIL Images (source=child face to insert, target=base body image)
+        source_img = Image.open(io.BytesIO(source_bytes)).convert("RGB")  # Ensure RGB
+        target_img = Image.open(io.BytesIO(target_bytes)).convert("RGB")  # Ensure RGB
 
-        print(f"Input types: target={type(target_img)}, source={type(source_img)}")  # Debug
+        print(f"Input images loaded: source size={source_img.size}, target size={target_img.size}")  # Debug
 
-        # Call Gradio Space with PIL images
-        # Parameters: target, source, anonymization_ratio=0 (no anonymization), adversarial_defense=0 (no defense), settings=[] (simple swap, no modes)
-        # Use ["Compare"] if you want side-by-side output
+        # Call Gradio Space: source_img (face to use), 1 (first face), target_img (dest), 1 (first face)
         result = client.predict(
-            target_img,
             source_img,
-            0,  # Anonymization ratio (0 for full identity preservation)
-            0,  # Adversarial defense ratio (0 for no defense)
-            [],  # Settings: empty for basic swap; use ["Compare"] for side-by-side
-            api_name="/run_inference"
+            1,  # Source face index (assume single face)
+            target_img,
+            1,  # Target face index (assume single face)
+            api_name="/predict"  # Default for gr.Interface
         )
 
         print(f"Result type: {type(result)}")  # Debug
 
-        # Handle possible list output (e.g., if multiple)
-        output = result[0] if isinstance(result, (list, tuple)) else result
+        # Handle possible list output; take the single image
+        output = result[0] if isinstance(result, (list, tuple)) and len(result) > 0 else result
         print(f"Output type: {type(output)}")  # Debug
 
-        # Convert to base64 string (robust handling for all common types)
+        # Convert to base64 string (robust handling)
         if isinstance(output, (bytes, bytearray)):
             img_bytes = output
             base64_image = base64.b64encode(img_bytes).decode("utf-8")
@@ -66,7 +66,7 @@ async def swap_faces(target: UploadFile = File(...), source: UploadFile = File(.
             base64_image = base64.b64encode(img_bytes).decode("utf-8")
             print("Handled as PIL.Image")
         elif isinstance(output, np.ndarray):
-            # Ensure uint8 RGB/A
+            # Ensure uint8 RGB
             if output.dtype != np.uint8:
                 output = np.clip(output, 0, 1) * 255
                 output = np.uint8(output)
@@ -93,11 +93,10 @@ async def swap_faces(target: UploadFile = File(...), source: UploadFile = File(.
             print(f"Unexpected output type: {type(output)}")
             return {"error": f"Unexpected output type: {type(output)}"}
 
-        print(f"Base64 image type: {type(base64_image)}, length: {len(base64_image) if isinstance(base64_image, str) else 'N/A'}")  # Debug: Should be str
+        print(f"Base64 image generated: type={type(base64_image)}, length={len(base64_image)}")  # Debug
         return {"result": base64_image}
 
     except Exception as e:
         print(f"Exception details: {type(e).__name__}: {e}")
-        import traceback
-        print(traceback.format_exc())  # Full traceback for debugging
+        print(traceback.format_exc())  # Full traceback
         return {"error": str(e)}
