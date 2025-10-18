@@ -3,3 +3,4 @@ uvicorn
 gradio_client
 python-multipart
 Pillow
+numpy
