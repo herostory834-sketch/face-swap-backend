@@ -6,7 +6,8 @@ from PIL import Image
 import io
 import base64
 import numpy as np
-import os  # Added for os.path.isfile check
+import os
+import tempfile
 
 app = FastAPI(title="Face Swap Backend")
 
@@ -26,22 +27,41 @@ def ping():
 
 @app.post("/swap_faces")
 async def swap_faces(target: UploadFile = File(...), source: UploadFile = File(...)):
+    temp_files = []
     try:
         target_bytes = await target.read()
         source_bytes = await source.read()
 
-        # Call Gradio Space
+        # Create temporary files for images (gradio_client expects paths/URLs)
+        target_file = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+        target_file.write(target_bytes)
+        target_file.close()
+        target_path = target_file.name
+        temp_files.append(target_path)
+
+        source_file = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+        source_file.write(source_bytes)
+        source_file.close()
+        source_path = source_file.name
+        temp_files.append(source_path)
+
+        print(f"Created temp files: {target_path}, {source_path}")  # Debug
+
+        # Call Gradio Space with file paths
         result = client.predict(
-            target_bytes,
-            source_bytes,
+            target_path,
+            source_path,
             0,            # Anonymization ratio
             0,            # Adversarial defense ratio
-            ["Compare"],  # Mode
+            ["Compare"],  # Mode (may return multiple outputs)
             api_name="/run_inference"
         )
 
-        output = result[0]
-        print(f"Gradio output type: {type(output)}")  # Debug: Check this in logs
+        print(f"Result type: {type(result)}, length: {len(result) if hasattr(result, '__len__') else 'N/A'}")  # Debug
+
+        # Assume multiple outputs for "Compare" mode; take the last one (swapped image)
+        output = result[-1] if isinstance(result, (list, tuple)) else result
+        print(f"Output type: {type(output)}")  # Debug
 
         # Convert to base64 string
         if isinstance(output, (bytes, bytearray)):
@@ -55,7 +75,7 @@ async def swap_faces(target: UploadFile = File(...), source: UploadFile = File(.
             base64_image = base64.b64encode(img_bytes).decode("utf-8")
             print("Handled as PIL.Image")  # Debug
         elif isinstance(output, np.ndarray):
-            # Ensure it's uint8 RGB (Gradio/FaceDancer often returns this)
+            # Ensure it's uint8 RGB
             if output.dtype != np.uint8:
                 output = (np.clip(output, 0, 1) * 255).astype(np.uint8)
             img = Image.fromarray(output)
@@ -73,7 +93,6 @@ async def swap_faces(target: UploadFile = File(...), source: UploadFile = File(.
                 print("Handled as local file path")  # Debug
             else:
                 # Assume URL or existing base64 str
-                # If URL, fetch it (optional: add http.get logic here if needed)
                 base64_image = output
                 print("Handled as str (URL/base64)")  # Debug
         else:
@@ -86,3 +105,12 @@ async def swap_faces(target: UploadFile = File(...), source: UploadFile = File(.
     except Exception as e:
         print(f"Exception details: {type(e).__name__}: {e}")  # More debug
         return {"error": str(e)}
+    finally:
+        # Clean up temp files
+        for temp_path in temp_files:
+            try:
+                if os.path.exists(temp_path):
+                    os.unlink(temp_path)
+                    print(f"Cleaned up: {temp_path}")  # Debug
+            except Exception as cleanup_e:
+                print(f"Cleanup error: {cleanup_e}")
