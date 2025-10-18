@@ -9,7 +9,7 @@ app = FastAPI(title="Face Swap Backend")
 # Allow Flutter app to access the backend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # For production, replace "*" with your app's domain
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -20,12 +20,7 @@ client = Client("felixrosberg/face-swap")
 
 @app.get("/ping")
 def ping():
-    html_content = """
-    <html>
-        <head><title>Face Swap Backend</title></head>
-        <body><h2>✅ Backend is alive!</h2></body>
-    </html>
-    """
+    html_content = "<html><body><h2>✅ Backend is alive!</h2></body></html>"
     return HTMLResponse(content=html_content, status_code=200)
 
 @app.post("/swap_faces")
@@ -44,13 +39,13 @@ async def swap_faces(target: UploadFile = File(...), source: UploadFile = File(.
             api_name="/run_inference"
         )
 
-        # If result is bytes, encode to base64 for JSON serialization
-        if isinstance(result[0], (bytes, bytearray)):
-            base64_image = base64.b64encode(result[0]).decode("utf-8")
-            return {"result": base64_image}
+        # Convert bytes to base64 string if needed
+        output = result[0]
+        if isinstance(output, (bytes, bytearray)):
+            output = base64.b64encode(output).decode("utf-8")
 
-        # If result is already a string (base64), return as-is
-        return {"result": result[0]}
+        # Return JSON with base64 string
+        return {"result": output}
 
     except Exception as e:
         return {"error": str(e)}
