@@ -7,6 +7,7 @@ import io
 import base64
 import numpy as np
 import traceback
+import os
 
 app = FastAPI(title="Face Swap Backend")
 
@@ -18,9 +19,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Switched to a simpler, more reliable space: Dentro/face-swap
-# Supports direct PIL images, basic two-image swap with face index (we use 1 for single face)
-client = Client("Dentro/face-swap", verbose=False, timeout=120.0)  # Increased timeout to handle inference time
+# Using a reliable Roop-based space for simple two-image face swap
+client = Client("ezioruan/roop", verbose=False)
 
 @app.get("/ping")
 def ping():
@@ -39,13 +39,14 @@ async def swap_faces(target: UploadFile = File(...), source: UploadFile = File(.
 
         print(f"Input images loaded: source size={source_img.size}, target size={target_img.size}")  # Debug
 
-        # Call Gradio Space: source_img (face to use), 1 (first face), target_img (dest), 1 (first face)
+        # Call Gradio Space: source_img (face to insert), target_img (image to modify),
+        # face_enhancer=False, restore_face=False (simple swap without enhancements)
         result = client.predict(
             source_img,
-            1,  # Source face index (assume single face)
             target_img,
-            1,  # Target face index (assume single face)
-            api_name="/predict"  # Default for gr.Interface
+            False,  # face_enhancer
+            False,  # restore_face
+            api_name="/predict"
         )
 
         print(f"Result type: {type(result)}")  # Debug
@@ -80,7 +81,6 @@ async def swap_faces(target: UploadFile = File(...), source: UploadFile = File(.
             print("Handled as np.ndarray")
         elif isinstance(output, str):
             # Handle path or base64 str
-            import os
             if os.path.isfile(output):
                 with open(output, "rb") as f:
                     img_bytes = f.read()
